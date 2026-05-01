@@ -1,0 +1,437 @@
+---
+title: "step_05_main_measure_PLTD"
+date: "2025-07-21"
+---
+
+Overview
+This script computes and analyses the main measure - Proportion Looking Time at Deviant
+1. Computes PLTD at trial level (dwell time on deviant AOI/ total dwell on all AOIs)
+2. Aggregate to participant level
+3. Create group level dataset - overall, by block (learning/fatigue), by event(early vs late display)
+4. Statistical analysis
+
+Note - chance level is at 0.25 (4 quadrants)
+All analyses use valid trials and included participants only
+
+# Setup
+
+## Libraries
+
+```{r}
+# Import the necessary libraries
+library(readxl)
+library(tidyverse)
+library(rstatix)
+library(ggforce)
+library(ggpubr)
+library(patchwork)
+```
+
+## Experiment selection
+
+```{r}
+exp <- 'E1' 
+
+#for plotting purpose
+if (exp == "E1") {
+  levels_labels <- c(
+    "object",
+    "equilateral_triangle",
+    "isosceles_triangle",
+    "square",
+    "rhombus",
+    "pentagon"
+  )
+}
+
+
+```
+
+## Paths
+
+```{r}
+# Construct the paths
+path_data_processed <- file.path(getwd(), paste0("data/processed_", exp))
+path_wd <- file.path(getwd())
+```
+
+## Load data [eyetr w/ gaze locations]
+
+```{r}
+setwd(path_data_processed)
+load(sprintf("data_output_step02_%s.RData", exp))
+```
+
+```{r}
+str(data_output_step02)
+```
+
+```{r}
+data_output_step02 <- data_output_step02 %>%
+  mutate(shape_w_duck_car = shape) %>%
+  mutate(shape = ifelse(shape %in% c('duck','car'),'object',shape))
+```
+
+# MEASURE: prop_look_dev
+
+## Individual [averages] 
+
+Measure: proportion of looking at the deviant
+
+### Collapsed across events
+
+```{r}
+aux_prop_look_dev <- data_output_step02 %>%
+  filter(event %in% c('shapes_on_1','shapes_on_2')) %>%
+  group_by(participantid,ppt_included,block,trialnumber_withinblock,shape,gaze,
+           location_deviant,deviant_type,
+           orientation,
+           validtrial,sumvalidtrials_overall,
+           proponscreen_shapes_on_1,proponscreen_shapes_on_2,shape_w_duck_car) %>% 
+  count() %>%
+  pivot_wider(names_from = gaze, values_from = n, values_fill = 0, names_glue = "gaze_{gaze}")%>%
+  mutate(total_dwell_shapes = gaze_topleft_1 + gaze_topright_2 + gaze_bottomleft_3 + gaze_bottomright_4) %>%
+  mutate(total_dwell_deviant = case_when(
+    location_deviant == 1 ~ gaze_topleft_1,
+    location_deviant == 2 ~ gaze_topright_2,
+    location_deviant == 3 ~ gaze_bottomleft_3,
+    location_deviant == 4 ~ gaze_bottomright_4)) %>% 
+  mutate(prop_look_dev = (total_dwell_deviant/total_dwell_shapes))
+```
+
+### Split by event (shapes_on_1 vs shapes_on_2)
+
+```{r}
+aux_prop_look_dev_by_event <- data_output_step02 %>%
+  filter(event %in% c('shapes_on_1','shapes_on_2')) %>%
+  group_by(participantid,ppt_included,block,trialnumber_withinblock,shape,gaze,location_deviant,deviant_type,orientation,
+           validtrial,sumvalidtrials_overall,event,
+           proponscreen_shapes_on_1,proponscreen_shapes_on_2,shape_w_duck_car) %>%
+  count() %>%
+  pivot_wider(names_from = gaze, values_from = n, values_fill = 0, names_glue = "gaze_{gaze}")%>%
+  mutate(total_dwell_shapes = gaze_topleft_1 + gaze_topright_2 + gaze_bottomleft_3 + gaze_bottomright_4) %>%
+  mutate(total_dwell_deviant = case_when(
+    location_deviant == 1 ~ gaze_topleft_1,
+    location_deviant == 2 ~ gaze_topright_2,
+    location_deviant == 3 ~ gaze_bottomleft_3,
+    location_deviant == 4 ~ gaze_bottomright_4)) %>% 
+  mutate(prop_look_dev = (total_dwell_deviant/total_dwell_shapes))
+```
+
+## Group [averages] 
+
+### Overall
+```{r}
+aux_prop_look_dev_group <- aux_prop_look_dev %>%
+  filter(validtrial == 1) %>%
+  filter(ppt_included == 1) %>%
+  group_by(participantid,shape) %>%
+  summarise(m_prop_look_dev = mean(prop_look_dev, na.rm = T))
+```
+
+### Split by block
+
+```{r}
+aux_prop_look_dev_group_by_block <- aux_prop_look_dev %>%
+  filter(validtrial == 1) %>%
+  filter(ppt_included == 1) %>%
+  group_by(participantid,shape,block) %>%
+  summarise(m_prop_look_dev = mean(prop_look_dev, na.rm = T))
+```
+
+### Split by event [on_1 vs on_2]
+
+```{r}
+aux_prop_look_dev_group_by_event <- aux_prop_look_dev_by_event %>%
+  filter(validtrial == 1) %>%
+  filter(ppt_included == 1) %>%
+  group_by(participantid,shape,event) %>%
+  summarise(m_prop_look_dev = mean(prop_look_dev, na.rm = T))
+```
+
+```{r}
+aux_prop_look_dev_group %>%
+  filter(shape == 'square') %>%
+  filter(m_prop_look_dev < .25)
+```
+
+```{r}
+aux_prop_look_dev_group %>%
+  filter(shape == 'square') %>%
+  filter(m_prop_look_dev >= .25)
+```
+
+# PLOTS
+
+## Group
+
+### Boxplot [overall]
+
+```{r}
+p_overall <- aux_prop_look_dev_group %>% 
+  mutate(shape = factor(shape, levels = levels_labels)) %>%
+  ggplot(aes(y = m_prop_look_dev, x = shape, color = shape)) +
+  geom_boxplot() +
+  geom_point(position=position_dodge(width=.1)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "point", size = 4, color = "tomato") +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  ylim(0,0.6)
+
+p_overall
+
+ggsave(
+  filename = "intruder_step005_mainpropdev.png",
+  plot = p_overall,
+  width = 18,       # in inches
+  height = 12,       # adjust as needed
+  dpi = 300         # publication quality
+)
+``` 
+
+
+### Boxplot [split by event]
+
+```{r}
+p_event <- aux_prop_look_dev_group_by_event %>% 
+  mutate(shape = factor(shape, levels = levels_labels)) %>%
+  ggplot(aes(y = m_prop_look_dev, x = shape, color = shape)) +
+  geom_boxplot() +
+  geom_point(position=position_dodge(width=.1)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "point", size = 4, color = "tomato") +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust=1)) +
+  facet_wrap(. ~ event)
+```
+
+### Boxplot [blocks 1 vs 2 vs 3 vs 4]
+
+```{r}
+p_individual_blocks <- aux_prop_look_dev_group_by_block %>% 
+  mutate(shape = factor(shape, levels = levels_labels)) %>%
+  ggplot(aes(y = m_prop_look_dev, x = shape, color = shape)) +
+  geom_boxplot() +
+  geom_point(position=position_dodge(width=.1)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "point", size = 4, color = "tomato") +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust=1)) +
+  facet_wrap(. ~ block)
+
+p_individual_blocks
+```
+
+### Boxplot block1-2 vs block 3-4
+
+```{r}
+p_block <- aux_prop_look_dev_group_by_block %>% 
+  mutate(shape = factor(shape, levels = levels_labels)) %>%
+  mutate(block_group = case_when(
+      block %in% c(1, 2) ~ "Blocks 1-2",
+      block %in% c(3, 4) ~ "Blocks 3-4"
+    )) %>%
+  ggplot(aes(y = m_prop_look_dev, x = shape, color = shape)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position=position_dodge(width=.1), size=0.75) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "point", size = 1.8, color = "tomato") +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust=1)) +
+  facet_wrap(. ~ block_group)
+```
+
+
+```{r}
+ggarrange(
+  p_event, p_block,
+  ncol = 1, nrow = 2, labels = c("A", "B")
+)
+```
+
+## Individual
+
+#### Boxplots
+```{r}
+aux_prop_look_dev %>% 
+  filter(ppt_included == 1) %>%
+  filter(validtrial == 1) %>%
+  mutate(shape = factor(shape, levels = levels_labels)) %>%
+  ggplot(aes(y = prop_look_dev, x = shape, color = shape)) +
+  geom_boxplot() +
+  geom_point(position=position_dodge(width=.1)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "tomato") +
+  facet_wrap_paginate(~ participantid, ncol = 2, nrow = 2, page = 1) +  # shows 4 participants per page
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  facet_wrap(. ~ participantid)
+```
+#### Line
+```{r}
+aux_prop_look_dev %>% 
+  filter(ppt_included == 1) %>%
+  filter(validtrial == 1) %>%
+  filter(shape != "object") %>%
+  mutate(shape = factor(shape, levels = levels_labels)) %>%
+  ggplot(aes(y = prop_look_dev, x = shape, color = shape)) +
+  #geom_boxplot() +
+  #geom_point(position=position_dodge(width=.1)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "point", size = 3, aes(color = shape)) +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), size = 1, color = "gray") +
+  facet_wrap_paginate(~ participantid, ncol = 2, nrow = 2, page = 1) +  # shows 4 participants per page
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust=1)) +
+  facet_wrap(. ~ participantid)
+```
+
+
+```{r}
+aux_prop_look_dev %>% 
+  filter(ppt_included == 1, validtrial == 1) %>%
+  filter(shape != "object") %>%
+  mutate(shape = factor(shape, levels = levels_labels)) %>%
+  ggplot(aes(x = shape, y = prop_look_dev, group = participantid)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "line", aes(group = participantid), color = "gray70", size = 0.5) +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), color = "tomato", size = 1.5) + # group mean
+  # add mean points per shape (group mean)
+  stat_summary(fun = mean, geom = "point", size = 3, aes(color = shape)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(y = "Proportion looking at the deviant", x = "Shape")
+```
+# STATISTICS
+
+# Statistics: prop_look_dev
+```{r}
+aux_prop_look_dev_group %>%
+  group_by(shape) %>%
+  get_summary_stats(m_prop_look_dev, type = "mean_sd")
+```
+
+## Shapiro-Wilk test (normality assumption)
+
+```{r}
+aux_prop_look_dev_group %>%
+  group_by(shape) %>%
+  shapiro_test(m_prop_look_dev)
+```
+
+## Comparison against chance
+
+```{r}
+aux_prop_look_dev_group %>%
+  group_by(shape) %>%
+  t_test(m_prop_look_dev ~ 1, mu = .25)
+```
+## Pairwise comparisons of shapes
+
+```{r}
+aux <- aux_prop_look_dev_group %>% 
+  filter(!shape %in% c('car', 'duck')) %>%
+  convert_as_factor(participantid, shape) %>%
+  ungroup()
+```
+
+```{r}
+auxcheck <- aux %>%
+  pivot_wider(values_from = m_prop_look_dev, names_from = 'shape') 
+```
+
+```{r}
+aux %>%
+  pairwise_t_test(m_prop_look_dev ~ shape, 
+                  subject = "participantid",
+                  paired = TRUE, p.adjust.method = "bonferroni")
+```
+
+## Anova
+
+```{r}
+res.aov <- anova_test(
+  data = aux, dv = m_prop_look_dev, wid = participantid,
+  within = c(shape)
+  )
+```
+
+```{r}
+res.aov
+```
+
+## Condition weighted means 
+(each participant has multiple rows for each condition)
+```{r}
+aux_prop_look_dev_condition <- aux_prop_look_dev %>% 
+  filter(validtrial == 1, ppt_included == 1) %>%
+  group_by(participantid, shape, deviant_type, orientation, location_deviant) %>%
+  summarise(m_prop_look_dev = mean(prop_look_dev, na.rm = TRUE),
+            .groups = "drop")
+
+```
+
+```{r}
+# Mean ± SD by shape
+aux_prop_look_dev_condition %>%
+  group_by(shape) %>%
+  get_summary_stats(m_prop_look_dev, type = "mean_sd")
+
+# Mean ± SD by deviant_type
+aux_prop_look_dev_condition %>%
+  group_by(shape,deviant_type) %>%
+  get_summary_stats(m_prop_look_dev, type = "mean_sd")
+
+# Mean ± SD by orientation
+aux_prop_look_dev_condition %>%
+  group_by(shape,orientation) %>%
+  get_summary_stats(m_prop_look_dev, type = "mean_sd")
+
+# Mean ± SD by deviant location
+aux_prop_look_dev_condition %>%
+  group_by(shape,location_deviant) %>%
+  get_summary_stats(m_prop_look_dev, type = "mean_sd")
+```
+```{r}
+# By deviant_type
+anova_deviant_type <- aux_prop_look_dev_condition %>%
+  group_by(shape) %>%
+  anova_test(m_prop_look_dev ~ deviant_type)
+
+anova_deviant_type %>% get_anova_table()
+
+# By orientation
+anova_orientation <- aux_prop_look_dev_condition %>%
+  group_by(shape) %>%
+  anova_test(m_prop_look_dev ~ orientation)
+
+anova_orientation %>% get_anova_table()
+
+# By location_deviant
+anova_location <- aux_prop_look_dev_condition %>%
+  group_by(shape) %>%
+  anova_test(m_prop_look_dev ~ location_deviant)
+
+anova_location %>% get_anova_table()
+
+```
+```{r}
+anova_full <- aux_prop_look_dev_condition %>%
+  filter(!participantid == 136) %>%
+  anova_test(m_prop_look_dev ~ shape * deviant_type * orientation * location_deviant)
+
+get_anova_table(anova_full)
+
+```
+
+
+# Save data
+
+```{r}
+setwd(path_data_processed)
+write.csv(aux_prop_look_dev, file = "data_output_step05_individual_summary.csv", row.names = FALSE)
+```
+
+```{r}
+setwd(path_data_processed)
+write.csv(aux_prop_look_dev_group, file = "data_output_step05_group_summary.csv", row.names = FALSE)
+```
+
+
+ 
+

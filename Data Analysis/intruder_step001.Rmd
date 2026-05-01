@@ -1,0 +1,335 @@
+---
+title: "step1_compute_gaze_data"
+date: "2025-07-18"
+---
+
+This script does the following:
+
+1. reads in & concatenantes individual data files into one matrix,
+
+2. computes average gaze coordinates,
+
+3. computes gaze location within specified AOIs,
+
+4. saves the data w/ gaze location into one file `*.RData` that can be used for analysis.
+
+**Input** files:
+
+'[sub-]intruder_eyeData.csv'
+
+from /data/raw/
+
+**Output** files:
+
+`data_output_step01.RData`
+
+saved in /data/processed/
+
+# Raw data file structure 
+
+In SHAPES study, the raw data files contain the following columns. Some of the colum names are ammended below and saved in `aux_clean`.
+
+`timestamp` eye tracker timestamp
+
+`participantID` participant ID as assigned by the experimenter 
+
+`ID` randomization list id, renamed below to **`listid`**
+
+`expOrder` block id [range 1 to 4], renamed belwo to **`block`**
+
+
+# Setup
+
+## Libraries
+
+```{r}
+# Import the necessary libraries
+library(readxl)
+library(tidyverse)
+library(rstatix)
+```
+
+## Experiment selection
+
+```{r}
+exp <- 'E1'
+
+if (exp == "E1") {
+  samplecountmin <- 115
+  samplecountmax <- 125
+  filename_randomization <- '20250708_random_intruder.csv'
+}else {
+  stop("Unknown experiment")
+}
+```
+
+## Paths
+
+```{r}
+# Construct the paths
+path_data_raw <- file.path(getwd(), paste0("data/raw_", exp))
+path_data_processed <- file.path(getwd(), paste0("data/processed_", exp))
+path_rand <- file.path(getwd(), "randomization")
+path_wd <- file.path(getwd())
+```
+
+## Load data [eyetr]
+
+```{r}
+# Set the working directory
+setwd(path_data_raw)
+
+# Get file names of individual data files
+tmp <- list.files(pattern = "intruder_eyeData.csv$")
+
+# Read each csv file into a list
+listData = lapply(tmp, read.csv)
+
+# Concatenate the data in each file into one combined data frame
+aux = do.call(rbind.data.frame, listData)
+```
+
+
+```{r}
+rm(listData)
+```
+
+### Rename columns
+
+```{r}
+aux_clean <- aux %>% 
+  rename(participantid = participantID, block = expOrder, listid = ID, trialnumber_withinblock = trialNumber) %>%
+  group_by(participantid,block,trialnumber_withinblock,event) %>%
+  mutate(samplecount_trial = row_number()) %>%
+  ungroup()
+
+str(aux_clean)
+```
+
+## Load data [randomization]
+
+```{r}
+setwd(path_rand)
+randomization = read.csv(filename_randomization)
+randomization <- randomization %>%
+  rename(trialnumber_withinblock = trialNumber)
+```
+
+```{r}
+str(randomization)
+head(randomization)
+```
+```{r}
+if (exp == 'E1')
+  randomization <- randomization %>%
+    mutate(across(
+      .cols = c(location_deviant,location_standard,location_standard_smaller,location_standard_larger),
+      .fns = ~ if_else(listid > 10 & shape %in% c('car','duck'), . +1, .)
+    ))
+```
+
+
+## Merge data [eyetr, randomization]
+
+```{r}
+data_raw <- merge(aux_clean,randomization, by = c("listid","block","trialnumber_withinblock"))
+```
+
+```{r}
+rm(aux_clean)
+```
+
+## Load coordinates
+
+### Screen
+
+Read in the screen scoordinates.
+
+```{r}
+setwd(path_wd)
+source("coordinates_screen.txt")
+```
+
+### AOIs
+
+Read in the coordinates of different AOIs.
+
+```{r}
+setwd(path_wd)
+source("coordinates_aois.txt")
+```
+
+## Define functions
+
+### average()
+
+average() computes the average (x,y) coordinates of gaze
+
+```{r}
+average <- function(lx, rx, ly, ry){
+    if (is.na(lx) & is.na(ly) & is.na(rx) & is.na(ry)) return(NA)
+    else if (is.na(lx) & is.na(ly)) return (c(rx, ry))
+    else if (is.na(rx) & is.na(ry)) return (c(lx, ly))
+    else return (c((lx + rx)/2, (ly + ry)/2))
+}
+#if data from only one eye is available, we use that; if both, then calculate average
+#average x coordinates and y
+```
+
+### gazeDirection()
+
+```{r}
+gazeDirection <- function(x, y){
+    if (is.na(x) | is.na(y)) return("nogaze")
+    else if (between(y, aoi_top_lower, aoi_top_upper)){
+        if(between(x, aoi_left_west, aoi_left_east)) return("topleft_1")
+        else if(between(x, aoi_right_west, aoi_right_east)) return("topright_2")
+    }
+    else if (between(y, aoi_bottom_lower, aoi_bottom_upper)){
+        if(between(x, aoi_left_west, aoi_left_east)) return("bottomleft_3")
+        else if(between(x, aoi_right_west, aoi_right_east)) return("bottomright_4")
+    }
+    else if (between(y, -0.075, 0.075) & between(x, -0.075, 0.075)) return("centre")
+    else if (abs(x) > screen_xMax | abs(y) > screen_yMax) return("offscreen")
+    return("onscreen_elsewhere")
+}
+#checks whether gaze point is within an AOI and return which one
+```
+
+
+# EVENT DURATION [timing check for quality control]
+
+```{r}
+data_raw %>%
+  ungroup() %>%
+  distinct(event)
+```
+
+```{r}
+# Check the length (in samples) of events per trial
+aux_event_duration <- data_raw %>%
+    group_by(participantid, event, listid, block, trialnumber_withinblock) %>%
+    summarise(samplecount = n()) %>%
+  ungroup()
+```
+
+```{r}
+aux_event_duration
+```
+
+## Plot
+
+```{r}
+aux_event_duration %>%
+    ggplot(aes(x = trialnumber_withinblock, y = samplecount, color = as.factor(event))) +
+    geom_jitter() 
+```
+
+## Descriptive statistics
+
+TO DO: compute descriptive stats on event durations
+
+- only central attention getter can have varied event duration but rest of the events were fixed time so shouldn't - find the violations 
+
+```{r}
+aux_event_duration %>%
+  filter(event %in% c("shapes_on_1", "shapes_on_2")) %>%
+  group_by(participantid, event) %>%
+  get_summary_stats(samplecount)
+```
+
+
+```{r}
+aux_violations_event_duration <- aux_event_duration %>%
+  filter(
+    (event %in% c("shapes_on_1", "shapes_on_2")) 
+  ) %>%
+  mutate(violation_event_duration = ifelse((samplecount < samplecountmin | samplecount > samplecountmax),TRUE,FALSE)) %>%
+  select(participantid, block, trialnumber_withinblock, event, samplecount, violation_event_duration) %>%
+  rename(totalsamples_per_event = samplecount)
+```
+
+```{r}
+aux_violations_event_duration %>%
+  filter(violation_event_duration == TRUE) %>%
+  group_by(participantid,block,trialnumber_withinblock) %>%
+  count()
+```
+
+```{r}
+# Count total trials and valid trials
+valid_event_summary <- aux_violations_event_duration %>%
+  group_by(participantid, block, trialnumber_withinblock) %>%
+  summarise(
+    valid = all(!violation_event_duration),   # TRUE if no violation in the event
+    .groups = "drop"
+  ) %>%
+  summarise(
+    n_total_trials = n(),
+    n_valid_trials = sum(valid),
+    prop_valid = n_valid_trials / n_total_trials * 100
+  )
+
+valid_event_summary
+```
+
+```{r}
+# Merge back into main data
+data_raw_with_event_length <- merge(data_raw, aux_violations_event_duration, by = c("participantid", "event", "block", "trialnumber_withinblock")) %>%
+  arrange(participantid,block,trialnumber_withinblock,timestamp)
+```
+
+# COMPUTE GAZE
+
+## Average gaze coordinates
+
+```{r}
+data_output_step01 <- data_raw_with_event_length %>%
+  rowwise %>%
+  mutate(avgx = average(lx, rx, ly, ry)[1], 
+         avgy = average(lx, rx, ly, ry)[2]) 
+```
+
+## Gaze location w/i AOIs
+
+```{r}
+data_output_step01 <- data_output_step01 %>% 
+        rowwise %>% 
+        mutate(gaze = factor(gazeDirection(avgx, avgy),
+                             levels = c("topleft_1", "topright_2", 
+                                        "bottomleft_3", "bottomright_4","centre",
+                                        "onscreen_elsewhere",
+                                        "offscreen","nogaze")))
+```
+
+### Check
+
+```{r}
+unique(data_output_step01$gaze)
+```
+
+```{r}
+data_output_step01 %>% group_by(gaze) %>%
+  filter(event %in% c("shapes_on_1", "shapes_on_2")) %>%
+  count()
+```
+
+# Preview output data structure
+
+```{r}
+data_output_step01 <- dplyr::ungroup(data_output_step01)
+
+str(data_output_step01)
+```
+
+
+# Save data
+
+```{r}
+setwd(path_data_processed)
+save(
+  data_output_step01,
+  file = sprintf("data_output_step01_%s.RData", exp)
+)
+```
+

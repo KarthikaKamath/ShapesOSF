@@ -1,0 +1,371 @@
+---
+title: "Step4_preliminiary_sanity_checks"
+date: "2025-07-18"
+---
+
+Overview
+This script:
+1. Checks gaze distribution (across quadrants)
+2. Examines gaze allocation by each stimuli on a single display (standard, small standard, large standard and deviant, i.e. also checks for size manipulations)
+3. Tests for potential color biases
+4. Produces sanity-check plots
+
+# Setup
+
+## Libraries
+
+```{r}
+# Import the necessary libraries
+library(readxl)
+library(tidyverse)
+library(rstatix)
+library(ggforce)
+library(ggpubr)
+library(scales)
+library(afex)
+library(emmeans)
+```
+
+## Paths
+
+```{r}
+exp <- 'E1' 
+# Construct the paths
+path_data_processed <- file.path(getwd(), paste0("data/processed_", exp))
+path_wd <- file.path(getwd())
+```
+
+## Load data [data_output_step02]
+
+```{r}
+setwd(path_data_processed)
+load(sprintf("data_output_step02_%s.RData", exp))
+```
+```{r}
+data_output_step02 <- data_output_step02 %>%
+  mutate(shape_w_duck_car = shape) %>%
+  mutate(shape = ifelse(shape %in% c('duck','car'),'object',shape))
+
+#for plotting purpose
+if (exp == "E1") {
+  desired_shape_order <- c(
+    "object",
+    "equilateral_triangle",
+    "isosceles_triangle",
+    "square",
+    "rhombus",
+    "pentagon"
+  )
+} 
+```
+
+##Proportion of gaze per quadrant
+
+(computed first at participant-level then group level)
+
+```{r}
+aoi_quadrants <- c("topleft_1", "topright_2", "bottomleft_3", "bottomright_4")
+
+# Participant-level proportion looking per quadrant
+participant_gaze_summary <- data_output_step02 %>%
+  filter(validtrial == 1, ppt_included == 1, 
+         event %in% c("shapes_on_1", "shapes_on_2")) %>%
+  filter(!gaze %in% c("offscreen", "nogaze")) %>%
+  group_by(participantid, shape, block, gaze) %>% 
+  summarise(gaze_count = n(), .groups = "drop") %>%
+  group_by(participantid, shape, block) %>%
+  mutate(total_onscreen = sum(gaze_count)) %>%
+  ungroup() %>%
+  filter(gaze %in% aoi_quadrants) %>%
+  pivot_wider(names_from = gaze, values_from = gaze_count, values_fill = 0) %>%
+  mutate(
+    total_shapes_aoi = rowSums(across(all_of(aoi_quadrants))),
+    prop_topleft_1 = topleft_1 / total_shapes_aoi,
+    prop_topright_2 = topright_2 / total_shapes_aoi,
+    prop_bottomleft_3 = bottomleft_3 / total_shapes_aoi,
+    prop_bottomright_4 = bottomright_4 / total_shapes_aoi
+  ) %>%
+  pivot_longer(
+    cols = starts_with("prop_"),
+    names_to  = "aoi",
+    values_to = "prop",
+    names_prefix = "prop_"
+  )
+
+participant_gaze_summary %>%
+  group_by(aoi) %>%
+  get_summary_stats(prop, type = "full")
+
+#stats
+aoi_means <- participant_gaze_summary %>%
+  filter(!is.na(prop)) %>%
+  group_by(participantid, aoi) %>%
+  summarise(prop_mean = mean(prop, na.rm = TRUE), .groups = "drop")
+
+anova_results <- aoi_means %>%
+  anova_test(
+    dv = prop_mean,
+    wid = participantid,
+    within = aoi
+  )
+anova_results
+
+pairwise_results <- aoi_means %>%
+  pairwise_t_test(
+    prop_mean ~ aoi,
+    paired = TRUE,
+    p.adjust.method = "BH"
+  )
+
+pairwise_results
+
+
+#Plot
+p_quadrant <- participant_gaze_summary %>%
+  group_by(participantid, aoi) %>%
+  summarise(m_prop = mean(prop, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = aoi, y = m_prop, fill = aoi)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.6, size = 1.5) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  stat_summary(fun = mean, geom = "point", size = 4, color = "tomato") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic(base_size = 8) +
+  labs(
+    title = "Participant-level Proportion of Gaze by Quadrant",
+    x = "Screen Quadrant",
+    y = "Mean Proportion of Looking"
+  )+
+  theme(
+    legend.position = "none")
+
+dodge_width <- 0.8
+
+# Compute mean per participant per quadrant per shape
+participant_gaze_shape_summary <- participant_gaze_summary %>%
+  group_by(participantid, shape, aoi) %>%
+  summarise(m_prop = mean(prop, na.rm = TRUE), .groups = "drop")
+
+# Plot
+p_quadrant_by_shape <- ggplot(participant_gaze_shape_summary, aes(x = aoi, y = m_prop, fill = aoi)) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA, color = "black", position = position_dodge(width = dodge_width)) +
+  geom_jitter(aes(color = aoi), alpha = 0.7, size = 1.5, position = position_dodge(width = dodge_width)) +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "tomato", position = position_dodge(width = dodge_width)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  facet_wrap(~shape) +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic(base_size = 8) +
+  labs(
+    title = "Participant-level Proportion of Gaze by Quadrant and Shape",
+    x = "Screen Quadrant",
+    y = "Mean Proportion of Looking",
+    fill = "Quadrant",
+    color = "Quadrant"
+  ) +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+```
+
+
+##Proportion of gaze by shape size
+
+```{r}
+participant_gaze_shape_size <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  filter(event %in% c("shapes_on_1", "shapes_on_2"),
+         !gaze %in% c("offscreen", "nogaze")) %>%
+  mutate(
+    # numeric quadrant from gaze name
+    gaze_quadrant = case_when(
+      gaze == "topleft_1" ~ 1,
+      gaze == "topright_2" ~ 2,
+      gaze == "bottomleft_3" ~ 3,
+      gaze == "bottomright_4" ~ 4,
+      TRUE ~ NA_real_
+    ),
+    # whether gaze matches deviant/standard positions
+    match_deviant = gaze_quadrant == location_deviant,
+    match_standard = gaze_quadrant == location_standard,
+    match_standard_smaller = gaze_quadrant == location_standard_smaller,
+    match_standard_larger = gaze_quadrant == location_standard_larger
+  ) %>%
+  group_by(participantid, shape) %>% 
+  summarise(
+    prop_look_deviant = mean(match_deviant, na.rm = TRUE),
+    prop_look_standard = mean(match_standard, na.rm = TRUE),
+    prop_look_standard_smaller = mean(match_standard_smaller, na.rm = TRUE),
+    prop_look_standard_larger = mean(match_standard_larger, na.rm = TRUE),
+    .groups = "drop"
+  )
+#reshape for plotting
+gaze_shape_long <- participant_gaze_shape_size %>%
+  pivot_longer(
+    cols = starts_with("prop_look"),
+    names_to = "stimuli_type",
+    values_to = "proportion",
+    names_prefix = "prop_look_"
+  )
+#group-level summary
+gaze_shape_long %>%
+  group_by(shape, stimuli_type) %>%
+  summarise(
+    mean_prop = mean(proportion, na.rm = TRUE),
+    sd_prop = sd(proportion, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+#stats
+
+
+# two-way repeated-measures ANOVA
+anova_results <- aov_ez(
+  id = "participantid",
+  dv = "proportion",
+  within = c("shape", "stimuli_type"),
+  data = gaze_shape_long,
+  factorize = TRUE,
+  type = 3
+)
+
+anova_results
+
+emm <- emmeans(anova_results, ~ stimuli_type | shape)
+pairs(emm, adjust = "holm")  # corrected for multiple comparisons
+
+#plot
+dodge_width <- 0.8
+p_shape_size <- gaze_shape_long %>% mutate(shape = factor(shape, levels = desired_shape_order)) %>%
+  ggplot(aes(x = shape, y = proportion, fill = stimuli_type)) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA, color = "black",position = position_dodge(width = dodge_width)) +
+  geom_jitter(aes(color = stimuli_type), alpha = 0.7, size = 1.5, position = position_dodge(width = dodge_width)) +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "tomato", position = position_dodge(width = dodge_width)  # align with boxplot
+  ) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  facet_wrap(~stimuli_type) +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic(base_size = 8) +
+  labs(
+    x = "Shape",
+    y = "Proportion of Looking",
+    fill = "Stimuli Type",
+    color = "Stimuli Type",
+    title = "Proportion of Gaze by Shape and Stimuli Type (Size)"
+  ) +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))
+
+#collapsed plot across shapes
+
+
+# Plot
+p_location_collapsed <- gaze_shape_long %>% mutate(shape = factor(shape, levels = desired_shape_order)) %>%
+ggplot(aes(x = shape, y = proportion, fill = shape)) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA, color = "black", position = position_dodge(width = dodge_width)) +
+  geom_jitter(aes(color = shape), alpha = 0.7, size = 1.5, position = position_dodge(width = dodge_width)) +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "tomato", position = position_dodge(width = dodge_width)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic(base_size = 8) +
+  labs(
+    x = "Stimuli Type",
+    y = "Proportion of Looking",
+    fill = "Stimuli Type",
+    color = "Stimuli Type",
+    title = "Proportion of Gaze by shape collapsed across stimuli type"
+  ) +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+##Proportion looking at deviant by color
+```{r}
+gaze_by_color <- data_output_step02 %>%
+  filter(validtrial == 1, ppt_included == 1) %>%
+  filter(event %in% c("shapes_on_1", "shapes_on_2")) %>%
+  filter(shape != "object") %>%  # exclude 'object'
+  # Keep only on-screen gazes
+  filter(!gaze %in% c("offscreen", "nogaze")) %>%
+  mutate(
+    gaze_quadrant = case_when(
+      gaze == "topleft_1" ~ 1,
+      gaze == "topright_2" ~ 2,
+      gaze == "bottomleft_3" ~ 3,
+      gaze == "bottomright_4" ~ 4,
+      TRUE ~ NA_real_
+    ),
+    match_deviant = gaze_quadrant == location_deviant
+  ) %>%
+  group_by(participantid, shape, color) %>% 
+  summarise(
+    prop_look_deviant = mean(match_deviant, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Group-level summary 
+gaze_by_color_summary <- gaze_by_color %>%
+  group_by(color) %>%
+  summarise(
+    mean_prop_look_deviant = mean(prop_look_deviant, na.rm = TRUE),
+    sd_prop_look_deviant = sd(prop_look_deviant, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+gaze_by_color_summary
+
+#stats
+gaze_by_color_participant <- gaze_by_color %>%
+  group_by(participantid, color) %>%
+  summarise(prop_look_deviant = mean(prop_look_deviant), .groups = "drop")
+
+anova_results <- gaze_by_color_participant %>%
+  anova_test(
+    dv = prop_look_deviant,
+    wid = participantid,
+    within = color
+  )
+anova_results
+
+
+# Plot
+p_color <- ggplot(gaze_by_color, aes(x = color, y = prop_look_deviant, fill = color)) +
+  geom_boxplot(alpha = 0.4, outlier.shape = NA, color = "black") +
+  geom_jitter(width = 0.15, alpha = 0.7, size = 2, aes(color = color)) +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 4,
+               fill = "tomato", color = "black", stroke = 0.8) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray40") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_classic(base_size = 8) +
+  labs(
+    title = "Proportion of Looking at Deviant by Shape Color",
+    x = "Color",
+    y = "Mean Proportion Looking",
+    fill = "Color",
+    color = "Color"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+## All plots
+```{r}
+final_figure <- ggarrange(
+  p_quadrant, p_quadrant_by_shape,p_location_collapsed, p_shape_size, p_color,
+  ncol =5 , nrow = 1, labels = c("A", "B", "C", "D", "E")
+)
+final_figure
+```
+```{r}
+ggsave(
+  filename = "intruder_step004_checks.png",
+  plot = final_figure,
+  width = 25,       # in inches
+  height = 10,       # adjust as needed
+  dpi = 300        
+)
+```

@@ -1,0 +1,440 @@
+---
+title: "step2_compute_inclusion_criteria"
+date: "2025-07-18"
+---
+
+Overview
+This script:
+1. Loads processed gaze data (step01)
+2. Computes trial-level gaze quality metrics
+3. Applies trial and participant inclusion criteria
+4. Merges inclusion flags back into the dataset
+5. Saves final dataset for analysis
+
+# Setup
+
+## Libraries
+
+```{r}
+# Import the necessary libraries
+library(readxl)
+library(tidyverse)
+library(rstatix)
+library(ggforce)
+```
+
+## Experiment selection
+
+```{r}
+exp <- 'E1' #or E2
+
+if (exp == "E1") {
+  samplecountmin <- 115
+  samplecountmax <- 125
+  filename_randomization <- '20250708_random_intruder.csv'
+}else {
+  stop("Unknown experiment")
+}
+```
+
+## Paths
+
+```{r}
+# Construct the paths
+path_data_processed <- file.path(getwd(), paste0("data/processed_", exp))
+path_wd <- file.path(getwd())
+```
+
+## Load data [data_output_step01]
+
+```{r}
+setwd(path_data_processed)
+load(sprintf("data_output_step01_%s.RData", exp))
+```
+## Load coordinates
+
+### Screen
+
+Read in the screen coordinates.
+
+```{r}
+setwd(path_wd)
+source("coordinates_screen.txt")
+```
+
+### AOIs
+
+Read in the coordinates of different AOIs.
+
+```{r}
+setwd(path_wd)
+source("coordinates_aois.txt")
+```
+
+## Define AOIs for plotting
+
+```{r}
+aoi_left_bottom <- geom_rect(aes(xmin = aoi_left_west, xmax = aoi_left_east,
+                             ymin = aoi_bottom_upper, ymax = aoi_bottom_lower),
+                             fill = 'white', color = "darkcyan", alpha = 0, linewidth = 1) 
+
+aoi_right_bottom <- geom_rect(aes(xmin = aoi_right_west, xmax = aoi_right_east,
+                             ymin = aoi_bottom_upper, ymax = aoi_bottom_lower),
+                             fill = 'white', color = "darkcyan", alpha = 0, linewidth = 1)
+
+aoi_left_top <- geom_rect(aes(xmin = aoi_left_west, xmax = aoi_left_east,
+                             ymin = aoi_top_lower, ymax = aoi_top_upper),
+                             fill = 'white', color = "darkgreen", alpha = 0, linewidth = 1) 
+
+aoi_right_top <- geom_rect(aes(xmin = aoi_right_west, xmax = aoi_right_east,
+                             ymin = aoi_top_lower, ymax = aoi_top_upper),
+                             fill = 'white', color = "darkgreen", alpha = 0, linewidth = 1) 
+
+aoi_attention_getter <- geom_rect(aes(xmin = -.075, xmax = .075,
+                             ymin = -.075, ymax = .075),
+                             fill = 'white', color = "magenta", alpha = 0, linewidth = 1) 
+```
+
+# Explore
+
+## Gaze [w/i time window]
+
+### Preview 1 participant
+
+```{r}
+xCenter <- 0.6
+options(repr.plot.width = 8, repr.plot.height = 20)
+
+data_output_step01 %>% 
+  filter(participantid == 101) %>% 
+  filter(event %in% c('shapes_on_1','shapes_on_2')) %>%
+  ggplot(aes(x = avgx, y = avgy, color = event)) +
+   theme_classic() +
+   coord_cartesian(xlim = c(-8/9, 8/9), 
+                   ylim = c(-0.5, 0.5),
+                   expand = FALSE) +
+                     theme(axis.line = element_blank(),
+                          axis.text.x = element_blank(),
+                          axis.text.y = element_blank(),
+                          axis.ticks = element_blank(),
+                          axis.title.x = element_blank(),
+                          axis.title.y = element_blank(),
+                          panel.border = element_rect(colour = "black", fill = NA, size = 5)) +
+                    aoi_left_bottom + aoi_left_top +
+                    aoi_right_bottom + aoi_right_top + 
+                    aoi_attention_getter +
+                    geom_point()
+```
+### Preview all participants
+```{r}
+
+selected_events <- c("shapes_on_1", "shapes_on_2")
+
+p <- data_output_step01 %>%
+  filter(event %in% selected_events) %>%
+  ggplot(aes(x = avgx, y = avgy, color = event)) +
+  geom_point(alpha = 0.6, size = 0.8) +
+  theme_classic() +
+  coord_cartesian(xlim = c(-8/9, 8/9),
+                  ylim = c(-0.5, 0.5),
+                  expand = FALSE) +
+  facet_wrap_paginate(~ participantid, ncol = 2, nrow = 2, page = 1) +  # shows 4 participants per page
+  theme(
+    axis.line = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_rect(colour = "black", fill = NA, size = 1),
+    legend.position = "bottom"
+  ) +
+  aoi_left_bottom + aoi_left_top +
+  aoi_right_bottom + aoi_right_top +
+  aoi_attention_getter +
+  labs(title = "Gaze positions across participants (4 per page)",
+       color = "Event")
+
+n_pages <- n_pages(p)
+for (i in seq_len(n_pages)) {
+  print(p + facet_wrap_paginate(~ participantid, ncol = 2, nrow = 2, page = i))
+}
+
+```
+
+## Gaze [timecourse] (preview 1 participant for 1 block)
+
+```{r}
+data_output_step01 %>% 
+  filter(participantid == 101, block == 3) %>% 
+  filter(event %in% c('shapes_on_1','shapes_on_2')) %>% 
+  ggplot(aes(x = samplecount_trial, y = avgy),) + 
+  theme_classic() + 
+  theme(panel.border = element_rect(colour = "black", fill = NA, size = 1)) + 
+  #xlim(0,125) + 
+  geom_point(size = .5) + 
+  geom_point(aes(y = avgx), size = .5) + 
+  geom_line(color = "blue") + #blue line for vertical avgy
+  geom_line(aes(y = avgx), color = "red") + #red line for horizontal avgx
+  facet_grid(event ~ trialnumber_withinblock)
+```
+
+## Gaze [trajectory w/ AOIs] (preview 1 participant for 1 block)
+
+```{r}
+data_output_step01 %>% 
+  filter(participantid == 101, block == 1) %>% 
+  filter(event %in% c('shapes_on_1','shapes_on_2')) %>%
+  ggplot(aes(x = avgx, y = avgy, group = interaction(event, trialnumber_withinblock))) +
+    geom_path(aes(color = samplecount_trial), size = 0.7) +  
+    geom_point(size = 0.8, alpha = 0.6) +                    
+    scale_color_viridis_c(option = "plasma", direction = 1) + # color = time progression
+    theme_classic() +
+    theme(panel.border = element_rect(colour = "black", fill = NA, size = 1),
+          aspect.ratio = 1,                                   
+          strip.text = element_text(size = 8)) +
+    coord_cartesian(xlim = c(-8/9, 8/9), ylim = c(-0.5, 0.5)) +       
+    facet_grid(event ~ trialnumber_withinblock) +
+    labs(x = "Horizontal gaze (avgx)", 
+         y = "Vertical gaze (avgy)", 
+         color = "Time (sample index)",
+         title = "Gaze trajectory across trials and events") +
+  aoi_left_bottom + aoi_left_top + 
+  aoi_right_bottom + aoi_right_top + 
+  aoi_attention_getter
+
+```
+# Attendance, inclusion
+
+### Compute attendance [all events]
+
+A sample is valid if we recorded gaze on the screen.
+
+A sample is not valid if we did not recored gaze on the screen. This could be because we did not record gaze at all or we recorded gaze off-screen.
+
+```{r}
+aux_attendance_all_events <- data_output_step01 %>%
+  group_by(participantid,block,trialnumber_withinblock,event,shape,location_deviant,violation_event_duration,totalsamples_per_event) %>%
+  summarise(validsamples = sum(gaze %in% c("topleft_1", "topright_2",
+                                           "bottomleft_3","bottomright_4","centre",
+                                           "onscreen_elsewhere"), na.rm = TRUE),
+            samples_shape_aois = sum(gaze %in% c("topleft_1", "topright_2",
+                                           "bottomleft_3","bottomright_4"), na.rm = TRUE),
+            invalidsamples = sum(gaze %in% c("offscreen","nogaze"), na.rm = TRUE),
+  # fixation_ok check (≥18 consecutive AOI samples)
+      fixation_ok = {
+        aoi_vec <- gaze %in% c("topleft_1", "topright_2",
+                               "bottomleft_3", "bottomright_4")
+        runs <- rle(aoi_vec) #rle() = run-length encoding — Finds consecutive runs of same value
+        any(runs$values == TRUE & runs$lengths >= 18)
+      },
+      .groups = "drop"
+    ) %>%
+  mutate(proponscreen = validsamples/(validsamples+invalidsamples)) 
+
+str(aux_attendance_all_events)
+head(aux_attendance_all_events,4)
+```
+
+### Compute trial inclusion [selected events]
+
+*Intruder task*. A trial is valid iff it contains:
+- selected event durations are valid
+- a minimum 50% of valid samples,
+- a minimum 1 fixation (i.e. 300 ms, i.e. >=18 samples) 
+
+```{r}
+selected_events = c('shapes_on_1', 'shapes_on_2')
+```
+
+
+```{r}
+aux_duration_issues <- aux_attendance_all_events %>%
+  filter(event %in% selected_events) %>%
+  select(-validsamples,-invalidsamples, -violation_event_duration, samples_shape_aois) %>%
+  pivot_wider(names_from = 'event', values_from = c(proponscreen,totalsamples_per_event,fixation_ok,samples_shape_aois)) %>%
+  mutate(
+    prop_onscreen_gaze_shapes_still_overall = (proponscreen_shapes_on_1+proponscreen_shapes_on_2)/2,
+    fixation_ok_overall = fixation_ok_shapes_on_1 | fixation_ok_shapes_on_2,
+    trialclassification = case_when(
+      totalsamples_per_event_shapes_on_1 > samplecountmax |
+      totalsamples_per_event_shapes_on_2 > samplecountmax ~ "trial_too_long",
+      totalsamples_per_event_shapes_on_1 < samplecountmin |
+      totalsamples_per_event_shapes_on_2 < samplecountmin ~ "trial_too_short",
+      totalsamples_per_event_shapes_on_1 <= samplecountmax &
+      totalsamples_per_event_shapes_on_2 <= samplecountmax &
+      totalsamples_per_event_shapes_on_1 >= samplecountmin &
+      totalsamples_per_event_shapes_on_2 >= samplecountmin ~ "trial_duration_okay",
+    )
+    )
+```
+
+```{r}
+aux_duration_issues %>%
+  group_by(trialclassification) %>%
+  count()
+```
+
+```{r}
+aux_duration_issues_count <- aux_duration_issues %>%
+  group_by(participantid,trialclassification) %>%
+  count() %>%
+   pivot_wider(
+    names_from = trialclassification, values_from = n,
+    values_fill = 0   # fill missing combinations with 0
+  ) %>%
+  mutate(
+    trial_duration_out_of_bounds =
+      rowSums(across(any_of(c("trial_too_long", "trial_too_short"))))
+  )
+```
+
+#### Exclute ppts with more than 2 trials with invalid duration
+
+```{r}
+aux_duration_issues_count %>%
+  filter(trial_duration_out_of_bounds > 2) 
+```
+
+```{r}
+aux_pptexclude_duration <- aux_duration_issues_count %>%
+  filter(trial_duration_out_of_bounds > 2) %>%
+  pull(participantid)
+```
+
+#### Exclute ppts with side biases
+
+TO DO before preregistration: specify the criteria for side bias.For, now it is by individual observation of data and experimenter
+
+```{r}
+aux_pptexclude_sidebias <- if (exp == "E1") c(122) else NULL
+```
+
+#### Continued
+
+```{r}
+aux_attendance_shapes_still <- aux_attendance_all_events %>%
+  filter(event %in% selected_events) %>%
+  select(-validsamples,-invalidsamples, -violation_event_duration, samples_shape_aois) %>%
+  pivot_wider(names_from = 'event', values_from = c(proponscreen,totalsamples_per_event,fixation_ok,samples_shape_aois)) %>%
+  mutate(
+    prop_onscreen_gaze_shapes_still_overall = (proponscreen_shapes_on_1+proponscreen_shapes_on_2)/2,
+    fixation_ok_overall = fixation_ok_shapes_on_1 | fixation_ok_shapes_on_2,
+    validtrial = ifelse(
+      proponscreen_shapes_on_1 >= .5 & 
+        proponscreen_shapes_on_2 >= .5 &
+        (samples_shape_aois_shapes_on_1 > 18 | samples_shape_aois_shapes_on_2 > 18) &
+        location_deviant > 0 &
+        totalsamples_per_event_shapes_on_1 <= samplecountmax & totalsamples_per_event_shapes_on_2 <= samplecountmax &
+        totalsamples_per_event_shapes_on_1 >= samplecountmin & totalsamples_per_event_shapes_on_2 >= samplecountmin &
+        fixation_ok_overall == TRUE,
+      1,
+      0))
+
+str(aux_attendance_shapes_still)
+head(aux_attendance_shapes_still,50)
+aux_ppt <- aux_attendance_shapes_still %>% filter(participantid == 126)
+```
+
+### Compute participant inclusion
+
+```{r}
+aux_valid_trial_participants <- aux_attendance_shapes_still %>%
+  group_by(participantid,shape) %>%
+  summarise(sumvalidtrials = sum(validtrial)) %>%
+  pivot_wider(names_from = shape, values_from = sumvalidtrials, names_glue = "sumvalidtrials_{shape}") %>%
+  mutate(across(everything(), ~ replace(., is.na(.), 0))) %>%
+  mutate(sumvalidtrials_overall = rowSums(across(starts_with("sumvalidtrials_")), na.rm = TRUE)) %>%
+  mutate(sumvalidtrials_object = sumvalidtrials_duck + sumvalidtrials_car) %>%
+  mutate(ppt_included = if_else(
+    if_any(
+      c(starts_with("sumvalidtrials_"), -sumvalidtrials_car, -sumvalidtrials_duck),
+      ~ . == 0
+    )
+    | participantid %in% aux_pptexclude_duration # [7/12/25] exclude ppts who had more 2 trials with invalid duration
+    | participantid %in% aux_pptexclude_sidebias, # [7/12/25] exclude ppts with side biases
+    0L, 1L
+  )) 
+
+aux_valid_trial_participants
+```
+
+## Merge data [eyetr, attendance]
+
+```{r}
+aux <- merge(data_output_step01,aux_attendance_shapes_still,
+             by = c('participantid','block','trialnumber_withinblock','shape','location_deviant'))
+```
+
+## Merge data [eyetr, validtrials]
+
+```{r}
+data_output_step02 <- merge(aux,aux_valid_trial_participants,by = c('participantid'))
+```
+
+```{r}
+str(data_output_step02)
+head(data_output_step02)
+```
+## Print | count included ppts
+
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 1) %>%
+  distinct(participantid) %>%
+  pull(participantid) %>%
+  cat(sep = ", ")
+```
+
+
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 1) %>%
+  distinct(participantid) %>%
+  count()
+```
+
+## Print | count excluded ppts
+
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 0) %>%
+  distinct(participantid) %>%
+  pull(participantid) %>%
+  cat(sep = ", ")
+```
+
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 0) %>%
+  distinct(participantid) %>%
+  count()
+```
+
+## Print included lists
+
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 1) %>%
+  distinct(listid) %>%
+  pull(listid) %>%
+  cat(sep = ", ")
+```
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 1) %>%
+  distinct(participantid, listid)
+
+```
+
+
+# Save data 
+
+```{r}
+setwd(path_data_processed)
+save(
+  data_output_step02,
+  file = sprintf("data_output_step02_%s.RData", exp)
+)
+```
+

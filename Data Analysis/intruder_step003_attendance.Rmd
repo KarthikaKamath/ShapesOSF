@@ -1,0 +1,325 @@
+---
+title: "step2_compute_screen_attendance"
+date: "2025-07-18"
+---
+
+ Overview
+ This script:
+ 1. Summarises valid trials per participant
+ 2. Computes on-screen gaze (attendance)
+ 3. Examines attendance across blocks and shapes
+ 4. Produces summary plots for reporting
+
+# Setup
+
+## Libraries
+
+```{r}
+# Import the necessary libraries
+library(readxl)
+library(tidyverse)
+library(rstatix)
+library(ggforce)
+library(ggpubr)
+library(scales)
+```
+```{r}
+exp <- 'E1' 
+```
+
+
+## Paths
+
+```{r}
+# Construct the paths
+path_data_processed <- file.path(getwd(), paste0("data/processed_", exp))
+path_wd <- file.path(getwd())
+```
+
+## Load data [data_output_step02]
+
+```{r}
+setwd(path_data_processed)
+load(sprintf("data_output_step02_%s.RData", exp))
+```
+```{r}
+data_output_step02 <- data_output_step02 %>%
+  mutate(shape_w_duck_car = shape) %>%
+  mutate(shape = ifelse(shape %in% c('duck','car'),'object',shape))
+```
+```{r}
+#for plotting purpose
+if (exp == "E1") {
+  desired_shape_order <- c(
+    "object",
+    "equilateral_triangle",
+    "isosceles_triangle",
+    "square",
+    "rhombus",
+    "pentagon"
+  )
+} 
+```
+
+#Attendance
+
+##Number of valid trials
+
+###overall stats
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 1) %>% 
+  distinct(participantid, sumvalidtrials_overall) %>%
+  get_summary_stats(sumvalidtrials_overall, type = "full")
+#plot
+pA <- data_output_step02 %>%
+  filter(ppt_included == 1) %>%
+  distinct(participantid, sumvalidtrials_overall) %>%
+  ggplot(aes(x = sumvalidtrials_overall)) +
+  geom_histogram(binwidth = 1, fill = "#4C72B0", color = "black", alpha = 0.8) +
+  theme_classic(base_size = 13) +
+  labs(
+    title = "A. Valid trials per infant: frequency distribution",
+    x = "Number of valid trials",
+    y = "Number of infants"
+  )
+
+```
+
+###block-wise
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  distinct(participantid, block, shape, trialnumber_withinblock, .keep_all = TRUE) %>%
+  group_by(participantid,block) %>%            # first, count per participant
+  summarise(n_valid_trials = n(), .groups = "drop") %>%
+  group_by(block) %>%                           # then, aggregate across participants
+  get_summary_stats(n_valid_trials, type = "mean")
+#plot
+block_summary <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  distinct(participantid, block, shape, trialnumber_withinblock) %>%
+  group_by(participantid, block) %>%
+  summarise(n_valid_trials = n(), .groups = "drop")
+
+pB <- block_summary %>%
+  ggplot(aes(x = factor(block), y = n_valid_trials)) +
+  geom_boxplot(alpha = 0.4, outlier.shape = NA, width = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.6, size = 1.5) +
+  stat_summary(fun = mean, geom = "point",
+               shape = 23, size = 3, fill = "tomato") +
+  theme_classic(base_size = 13) +
+  labs(
+    title = "B. Number of Valid trials by block",
+    x = "Block",
+    y = "Number of valid trials"
+  )
+
+```
+### valid trials per condition (shape)
+```{r}
+data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  distinct(participantid, block, shape, trialnumber_withinblock, .keep_all = TRUE) %>%
+  group_by(participantid,shape) %>%            # first, count per participant
+  summarise(n_valid_trials = n(), .groups = "drop") %>%
+  group_by(shape) %>%                           # then, aggregate across participants
+  get_summary_stats(n_valid_trials, type = "mean_sd")
+
+#plot
+shape_summary <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  distinct(participantid, block, shape, trialnumber_withinblock) %>%
+  group_by(participantid, shape) %>%
+  summarise(n_valid_trials = n(), .groups = "drop")
+
+pC <- shape_summary %>%
+  mutate(shape = factor(shape, levels = desired_shape_order)) %>%
+  ggplot(aes(x = shape, y = n_valid_trials, fill = shape)) +
+  geom_boxplot(alpha = 0.4, outlier.shape = NA, width = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.6, size = 1.5) +
+  stat_summary(fun = mean, geom = "point",
+               shape = 23, size = 3, fill = "tomato") +
+  theme_classic(base_size = 13) +
+  labs(
+    title = "C. Number of valid trials by shape",
+    x = "Shape",
+    y = "Number of valid trials"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+##On-screen gaze during valid trials
+```{r}
+attendance_summary <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  group_by(participantid) %>%
+  summarise(mean_proponscreen = mean((proponscreen_shapes_on_1 + proponscreen_shapes_on_2)/2,
+                                     na.rm = TRUE)) %>%
+  get_summary_stats(mean_proponscreen, type = "full")
+
+attendance_summary
+
+#plot
+pD <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  group_by(participantid) %>%
+  summarise(mean_proponscreen = mean((proponscreen_shapes_on_1 +
+                                       proponscreen_shapes_on_2) / 2,
+                                     na.rm = TRUE)) %>%
+  ggplot(aes(y = mean_proponscreen, x = "")) +
+  geom_boxplot(fill = "#55A868", alpha = 0.5, width = 0.6) +
+  geom_jitter(width = 0.05, alpha = 0.6) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  theme_classic(base_size = 13) +
+  labs(
+    title = "D. Overall on-screen gaze",
+    x = NULL,
+    y = "Proportion on-screen"
+  )
+
+```
+
+###screen attendance by blocks
+```{r}
+attendance_by_block <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  # Compute mean screen attendance per participant per block
+  group_by(participantid, block) %>%
+  summarise(mean_proponscreen = mean((proponscreen_shapes_on_1 + proponscreen_shapes_on_2)/2,
+                                     na.rm = TRUE),
+            .groups = "drop") %>%
+  # Now get group-level summary (M, SD across participants)
+  group_by(block) %>%
+  get_summary_stats(mean_proponscreen, type = "mean_sd")
+
+attendance_by_block
+
+#plot
+pE <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  group_by(participantid, block) %>%
+  summarise(mean_proponscreen = mean((proponscreen_shapes_on_1 +
+                                       proponscreen_shapes_on_2) / 2,
+                                     na.rm = TRUE),
+            .groups = "drop") %>%
+  ggplot(aes(x = factor(block), y = mean_proponscreen)) +
+  geom_boxplot(alpha = 0.4, outlier.shape = NA, width = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "point",
+               shape = 23, size = 3, fill = "tomato") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  theme_classic(base_size = 13) +
+  labs(
+    title = "E. On-screen gaze by block",
+    x = "Block",
+    y = "Proportion on-screen"
+  )
+
+```
+### screen attendance by shape
+```{r}
+attendance_by_shape <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  # Compute mean screen attendance per participant per shape
+  group_by(participantid, shape) %>%
+  summarise(mean_proponscreen = mean((proponscreen_shapes_on_1 + proponscreen_shapes_on_2)/2,
+                                     na.rm = TRUE),
+            .groups = "drop") 
+
+attendance_by_shape %>%
+# Now get group-level summary (M, SD across participants)
+  group_by(shape) %>%
+  get_summary_stats(mean_proponscreen, type = "mean_sd")
+
+#stats
+anova_results <- attendance_by_shape %>%
+  anova_test(dv = mean_proponscreen,
+             wid = participantid,
+             within = shape)
+
+anova_results
+
+pairwise_result <- attendance_by_shape %>%
+  pairwise_t_test(mean_proponscreen ~ shape,
+                  paired = TRUE,
+                  p.adjust.method = "holm")
+pairwise_result
+
+#plot
+pF <- data_output_step02 %>%
+  filter(ppt_included == 1, validtrial == 1) %>%
+  group_by(participantid, shape) %>%
+  summarise(
+    mean_proponscreen = mean((proponscreen_shapes_on_1 +
+                               proponscreen_shapes_on_2) / 2,
+                             na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(shape = factor(shape, levels = desired_shape_order)) %>%
+  ggplot(aes(x = shape, y = mean_proponscreen, fill = shape)) +
+  geom_boxplot(alpha = 0.4, outlier.shape = NA, width = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.6, size = 1.5) +
+  stat_summary(fun = mean, geom = "point",
+               shape = 23, size = 3, fill = "tomato") +
+  theme_classic(base_size = 13) +
+  labs(
+    title = "F. Screen Attendance per Shape (Participant-level)",
+    subtitle = "Each point = mean screen attendance per participant",
+    x = "Shape",
+    y = "Proportion on-screen"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+##All plots
+```{r}
+final_row1 <- ggarrange(
+  pA, pB, pC,
+  ncol = 3,
+  labels = c("A", "B", "C")
+)
+
+final_row2 <- ggarrange(
+  pD, pE, pF,
+  ncol = 3,
+  labels = c("D", "E", "F")
+)
+
+final_figure <- ggarrange(
+  ggarrange(
+    text_grob("Valid trials", face = "bold", size = 14),
+    final_row1,
+    ncol = 1,
+    heights = c(0.1, 1)
+  ),
+  ggarrange(
+    text_grob("Screen attendance during valid trials", face = "bold", size = 14),
+    final_row2,
+    ncol = 1,
+    heights = c(0.1, 1)
+  ),
+  nrow = 2
+)
+
+final_figure
+
+```
+```{r}
+ggsave(
+  filename = "intruder_step003_attendance.png",
+  plot = final_figure,
+  width = 18,       # in inches
+  height = 12,       # adjust as needed
+  dpi = 300        
+)
+```
+

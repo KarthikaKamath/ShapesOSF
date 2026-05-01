@@ -1,0 +1,1 @@
+aoi_left_west <- -8/9/2aoi_left_east <- -.075aoi_right_west <- .075aoi_right_east <- 8/9/2aoi_bottom_upper <- -.1aoi_bottom_lower <- -.45aoi_top_upper <- .45aoi_top_lower <- .1aoi_middle_upper <- .35/2aoi_middle_lower <- -.35/2

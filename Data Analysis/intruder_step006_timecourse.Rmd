@@ -1,0 +1,317 @@
+---
+title: "step6_timecourse"
+date: "2025-07-21"
+---
+
+This script computes and visualises the time course of infants’ looking behaviour toward the deviant stimulus.
+•	For each trial, gaze samples during the shapes_on_1 and shapes_on_2 events were coded as:
+o	1 if gaze fell on the deviant stimulus location
+o	0 if gaze fell on any standard stimulus location
+(samples off-screen or unrelated were excluded).
+•	For each participant, shape, event, and time sample, the proportion looking time at the deviant (PLTD) was computed as the mean of this binary gaze variable.
+•	 These participant-level PLTDs were then averaged across participants for each shape and time sample.
+
+
+# Setup
+
+## Libraries
+
+```{r}
+# Import the necessary libraries
+library(readxl)
+library(tidyverse)
+library(rstatix)
+library(ggforce)
+```
+
+```{r}
+exp <- 'E1'
+
+#for plotting purpose
+if (exp == "E1") {
+  levels_labels <- c(
+    "object",
+    "equilateral_triangle",
+    "isosceles_triangle",
+    "square",
+    "rhombus",
+    "pentagon"
+  )
+} 
+```
+
+## Paths
+
+```{r}
+# Construct the paths
+path_data_processed <- file.path(getwd(), paste0("data/processed_", exp))
+path_wd <- file.path(getwd())
+```
+
+## Load data [eyetr w/ gaze locations]
+
+```{r}
+setwd(path_data_processed)
+load(sprintf("data_output_step02_%s.RData", exp))
+```
+
+```{r}
+data_output_step02 <- data_output_step02 %>%
+  mutate(shape_w_duck_car = shape) %>%
+  mutate(shape = ifelse(shape %in% c('duck','car'),'object',shape))
+
+#for plotting purpose
+desired_shape_order <- levels_labels
+
+data_output_step02 <- data_output_step02 %>%
+  mutate(shape = factor(shape, levels = desired_shape_order))
+```
+## Time course 
+
+```{r}
+aux <- data_output_step02 %>%
+  filter(validtrial == 1) %>%
+  filter(ppt_included == 1) %>%
+  filter(event %in% c("shapes_on_1", "shapes_on_2")) %>%
+  mutate(
+    gaze_quadrant = as.numeric(str_extract(gaze, "\\d"))
+  )
+
+data_time_course <- aux %>%
+  mutate(gaze_is_on_deviant = case_when(
+    #gaze %in% c("offscreen", "nogaze") ~ NaN,
+    gaze_quadrant == location_deviant ~ 1,
+    gaze_quadrant %in% c(location_standard, location_standard_smaller, location_standard_larger) ~ 0  # standard
+    )) %>%
+  mutate(gaze_stim = case_when(
+    gaze == "centre" ~ "centre",
+    gaze_quadrant == location_deviant ~ "deviant",
+    gaze_quadrant %in% c(location_standard, location_standard_smaller, location_standard_larger) ~ gaze  # standard
+    ))
+```
+
+### without binning
+```{r}
+#within subject average
+timecourse_within_subject <- data_time_course %>%
+  filter(!is.na(gaze_is_on_deviant)) %>%
+  group_by(
+    participantid,
+    event,
+    shape,
+    samplecount_trial             
+  ) %>%
+  summarise(
+    pld_within_subj = mean(gaze_is_on_deviant, na.rm = TRUE),
+    .groups = "drop"
+  )
+#grand average
+timecourse_group <- timecourse_within_subject %>%
+  group_by(
+    event,
+    shape,
+    samplecount_trial
+  ) %>%
+  summarise(
+    mean_pld = mean(pld_within_subj, na.rm = TRUE),
+    se_pld = sd(pld_within_subj, na.rm = TRUE) / sqrt(n()),
+    n = n(),
+    .groups = "drop"
+  )
+
+```
+### plot (without binning)
+```{r}
+p_withoutbinning<-ggplot(timecourse_group,
+       aes(x = samplecount_trial, y = mean_pld, color = shape, fill = shape)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = mean_pld - se_pld,
+                  ymax = mean_pld + se_pld),
+              alpha = 0.2, color = NA) +
+  geom_hline(yintercept = 0.25, linetype = "dashed") +
+  facet_grid(shape ~ event) +
+  ylim(0, 0.75) +
+  theme_classic() +
+  labs(
+    #title = "Timecourse of proportion looking at deviant across participants",
+    subtitle = "X axis not binned",
+    x = "Time (samples)",
+    y = "Proportion looking at deviant"
+  )+
+  theme(
+    legend.position = "none")
+p_withoutbinning
+
+```
+
+
+
+### Bin the time axis 
+```{r}
+bin_width <- 5 #controls the smoothing of the graph
+
+data_binned <- data_time_course %>%
+  filter(
+    validtrial == 1,
+    ppt_included == 1,
+    event %in% c("shapes_on_1", "shapes_on_2")
+  ) %>%
+  mutate(
+    time_bin = ceiling(samplecount_trial / bin_width)
+  )
+
+```
+
+### PLTD (Proportion looking time at deviant) per bin per trial
+```{r}
+pld_trial_bin <- data_binned %>%
+  group_by(
+    participantid, shape, event, block,
+    trialnumber_withinblock, time_bin
+  ) %>%
+  summarise(
+    pld_bin = mean(gaze_is_on_deviant, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+### Average within participant (per condition)
+```{r}
+pld_participant <- pld_trial_bin %>%
+  group_by(participantid, shape, event, time_bin) %>%
+  summarise(
+    pld_participant = mean(pld_bin, na.rm = TRUE),
+    .groups = "drop"
+  )
+#split by block
+pld_participant_block <- pld_trial_bin %>%
+  group_by(participantid, shape, block, event, time_bin) %>%
+  summarise(
+    pld_participant = mean(pld_bin, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+```
+### average across participants (group level)
+```{r}
+pld_group <- pld_participant %>%
+  group_by(shape, event, time_bin) %>%
+  summarise(
+    mean_pld = mean(pld_participant, na.rm = TRUE),
+    se_pld   = sd(pld_participant, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+pld_group_block <- pld_participant_block %>%
+  group_by(shape, block, event, time_bin) %>%
+  summarise(
+    mean_pld = mean(pld_participant, na.rm = TRUE),
+    se_pld   = sd(pld_participant, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+
+```
+### plot
+```{r}
+p_withbinning <- ggplot(pld_group,
+       aes(x = time_bin * bin_width, y = mean_pld, color = shape, fill = shape)) +
+  geom_hline(yintercept = 0.25, linetype = "dashed") +
+  geom_ribbon(
+    aes(ymin = mean_pld - se_pld, ymax = mean_pld + se_pld),
+    alpha = 0.2, color = NA
+  ) +
+  geom_line() +
+  facet_grid(shape ~ event) +
+  ylim(0, 0.75) +
+  labs(
+    subtitle = "X axis samples binned with bin length = 5",
+    x = "Time (samples)",
+    y = "Proportion looking at deviant")+
+  theme_classic()+
+  theme(
+    legend.position = "none")
+
+p_withbinning
+
+
+```
+
+```{r}
+combined_timecourse <- ggarrange(
+  p_withoutbinning,
+  p_withbinning,
+  ncol = 2, nrow = 1,
+  labels = c("A", "B")
+)
+
+final_timecourse_figure <- annotate_figure(
+  combined_timecourse,
+  top = text_grob(
+    "Timecourse of proportion looking at deviant across participants",
+    face = "bold",
+    size = 14
+  )
+)
+
+final_timecourse_figure
+
+ggsave(
+  filename = "intruder_step006_timecourse.png",
+  plot = final_timecourse_figure,
+  width = 18,       # in inches
+  height = 12,       # adjust as needed
+  dpi = 300         # publication quality
+)
+```
+
+### plot split across blocks
+```{r}
+#options(bitmapType = "cairo")
+
+p_withbin_splitblock <- ggplot(pld_group_block,
+       aes(x = time_bin * bin_width,
+           y = mean_pld,
+           color = shape,
+           fill = shape)) +
+  geom_hline(yintercept = 0.25,
+             linetype = "dashed",
+             color = "gray40") +
+  geom_ribbon(
+    aes(ymin = mean_pld - se_pld,
+        ymax = mean_pld + se_pld),
+    alpha = 0.2,
+    color = NA
+  ) +
+  geom_line(size = 1) +
+  facet_grid(event + shape ~ block) +
+  scale_x_continuous(
+    limits = c(0, 120),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(limits = c(0, 0.75)) +
+  theme_classic(base_size = 15) +
+  labs(
+    title = "Time course of proportion looking to the deviant",
+    subtitle = "Averaged across participants; split by block; Bin length = 5 samples",
+    x = "Time (samples)",
+    y = "Proportion looking to deviant",
+    color = "Shape",
+    fill = "Shape"
+  ) +
+  theme(
+    legend.position = "none")
+
+p_withbin_splitblock
+
+# ggsave(
+#   filename = "intruder_step006_timecoursebyblock.png",
+#   plot = p_withbin_splitblock,
+#   width = 14,       # in inches
+#   height = 18,       # adjust as needed
+#   dpi = 300         # publication quality
+# )
+
+```
+
