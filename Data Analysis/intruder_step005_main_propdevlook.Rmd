@@ -325,7 +325,7 @@ aux_prop_look_dev_group %>%
 
 ```{r}
 aux <- aux_prop_look_dev_group %>% 
-  filter(!shape %in% c('car', 'duck')) %>%
+  filter(!shape %in% c('object')) %>%
   convert_as_factor(participantid, shape) %>%
   ungroup()
 ```
